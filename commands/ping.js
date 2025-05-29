@@ -1,19 +1,39 @@
-const msToTime=ms=>{if(ms<1e3)return`ms`;var str=[];return days=Math.floor(ms/864e5),daysms=ms%864e5,hours=Math.floor(daysms/36e5),hoursms=ms%36e5,minutes=Math.floor(hoursms/6e4),minutesms=ms%6e4,sec=Math.floor(minutesms/1e3),days&&str.push(days+'d'),hours&&str.push(hours+'h'),minutes&&str.push(minutes+'m'),sec&&str.push(sec+'s'),str.join(' ')};
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
 module.exports = {
-    name: 'ping',
-    aliases: [],
-    description: 'Returns latency and API ping',
-    run: async (client, message, args) => {
-        const color = await message.guild?.members.fetch(message.client.user.id).then(color => color.displayHexColor) || '#000000';
-        return message.channel.send(`Pinging...`).then((msg) => {
-            const embed = new EmbedBuilder()
-                .setTitle(`Pong!`)
-                .setDescription(`Server: \`${msg.createdAt - message.createdAt}ms\`\nAPI: \`${Math.round(client.ws.ping)}ms\`\nUptime: \`${msToTime(client.uptime)}\`\nMemory usage: \`${(process.memoryUsage().rss/1024/1024).toFixed(2)} MiB\``)
-                .setColor(color);
+    data: new SlashCommandBuilder()
+        .setName('ping')
+        .setDescription('Returns latency and API ping'),
+    async execute(interaction) {
+        const client = interaction.client;
+        const color = await interaction.guild?.members.fetch(client.user.id).then(member => member.displayHexColor) || '#000000';
 
-            msg.edit({ content: '\u200B', embeds: [embed] });
-        });
-    }
-}
+        await interaction.deferReply();
+
+        const sent = await interaction.channel.send({ content: 'Pinging...', fetchReply: true });
+
+        const embed = new EmbedBuilder()
+            .setTitle('Pong!')
+            .setDescription(`Server: \`${sent.createdTimestamp - interaction.createdTimestamp}ms\`\nAPI: \`${Math.round(client.ws.ping)}ms\`\nUptime: \`${msToTime(client.uptime)}\`\nMemory usage: \`${(process.memoryUsage().rss/1024/1024).toFixed(2)} MiB\``)
+            .setColor(color);
+
+        await interaction.editReply({ content: '\u200B', embeds: [embed] });
+    },
+};
+
+const msToTime = ms => {
+    if (ms < 1000) return 'ms';
+    var str = [];
+    let days = Math.floor(ms / 86400000);
+    let daysms = ms % 86400000;
+    let hours = Math.floor(daysms / 3600000);
+    let hoursms = ms % 3600000;
+    let minutes = Math.floor(hoursms / 60000);
+    let minutesms = ms % 60000;
+    let sec = Math.floor(minutesms / 1000);
+    if (days) str.push(days + 'd');
+    if (hours) str.push(hours + 'h');
+    if (minutes) str.push(minutes + 'm');
+    if (sec) str.push(sec + 's');
+    return str.join(' ') || '0s';
+};

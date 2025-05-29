@@ -1,101 +1,67 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
 const samp = require('samp-query');
 const AsciiTable = require('ascii-table');
 
 module.exports = {
-    name: 'players',
-    aliases: ['player'],
-    description: 'Lists all online players if players number is lower or equal 100',
-    run: async (client, message, args) => {
-        if(!process.env.SAMP_IP)
-            return message.channel.send('IP address is not set in the .env file!');
+    data: new SlashCommandBuilder()
+        .setName('players')
+        .setDescription('Lists all online players (up to 100)'),
+    async execute(interaction) {
+        if (!process.env.SAMP_IP) {
+            return interaction.reply({ content: 'IP address is not set in the .env file!', ephemeral: true });
+        }
 
-            const color = await message.guild?.members.fetch(message.client.user.id).then(color => color.displayHexColor) || '#000000';
+        const client = interaction.client;
+        const color = await interaction.guild?.members.fetch(client.user.id).then(member => member.displayHexColor) || '#000000';
 
-        const table1 = new AsciiTable().setHeading(' ID','NICK                ','   SCORE').setAlign(2, AsciiTable.RIGHT);
-        const table2 = new AsciiTable().setHeading(' ID','NICK                ','   SCORE').setAlign(2, AsciiTable.RIGHT);
-        const table3 = new AsciiTable().setHeading(' ID','NICK                ','   SCORE').setAlign(2, AsciiTable.RIGHT);
-        const table4 = new AsciiTable().setHeading(' ID','NICK                ','   SCORE').setAlign(2, AsciiTable.RIGHT);
-        const table5 = new AsciiTable().setHeading(' ID','NICK                ','   SCORE').setAlign(2, AsciiTable.RIGHT);
-
-        const ip = process.env.SAMP_IP.split(':');
+        const ipParts = process.env.SAMP_IP.split(':');
         const options = {
-            host: ip[0],
-            port: ip[1] || 7777
+            host: ipParts[0],
+            port: ipParts[1] || '7777'
         };
 
-        await samp(options, (error, query) => {
-            if(error){
+        await interaction.deferReply();
+
+        samp(options, (error, query) => {
+            const embed = new EmbedBuilder().setColor(color);
+
+            if (error) {
                 console.log(error);
-                const embed = new EmbedBuilder()
-                .setColor(color)
-                .setTitle(`${options.host}:${options.port}`)
-                .setDescription('Server is offline');
-        
-                return message.channel.send({ embeds: [embed] });
+                embed.setTitle(`${options.host}:${options.port}`)
+                     .setDescription('Server is offline');
+                return interaction.editReply({ embeds: [embed] });
             }
 
-            else{
-                const embed = new EmbedBuilder()
-                    .setColor(color)
-                    .setTitle(`**${query['hostname']}**`)
+            embed.setTitle(`**${query['hostname']}**`);
 
-                if(query['online'] > 0) {
-                    if (query['online'] > 100) {
-                        embed.addFields({ name: 'PLAYERS LIST', value: '*Number of players is grather than 100. I cannot list them!*' });
+            if (query['online'] > 0) {
+                if (query['online'] > 100) {
+                    embed.addFields({ name: 'PLAYERS LIST', value: '*Number of players is greater than 100. I cannot list them!*' });
+                } else if (!query['players'] || query['players'].length === 0) {
+                    embed.addFields({ name: 'PLAYERS LIST', value: '*Could not retrieve the player list or server reported empty (but online > 0). Try again...*' });
+                } else {
+                    const players = query['players'];
+                    let tablesContent = [];
+                    const playersPerTable = 20;
+
+                    for (let i = 0; i < players.length; i += playersPerTable) {
+                        const table = new AsciiTable().setHeading('ID', 'NICK', 'SCORE').setAlign(2, AsciiTable.RIGHT);
+                        const chunk = players.slice(i, i + playersPerTable);
+                        chunk.forEach(player => {
+                            table.addRow(player['id'], player['name'], player['score']);
+                        });
+                        tablesContent.push('```\n' + table.toString() + '\n```');
                     }
-                    else if (query['players'].length == 0) {
-                        embed.addFields({ name: 'PLAYERS LIST', value: '*I could not get the players list. Try again...*' });
+                    
+                    embed.addFields({ name: `${query['online']}/${query['maxplayers']}`, value: tablesContent[0] });
+                    for(let i = 1; i < tablesContent.length; i++) {
+                        embed.addFields({ name: '\u200B', value: tablesContent[i] });
                     }
-                    else {
-                        if(query['online'] > 0){
-                            for(var i=0;i<20;i++){
-                                if(query['players'][i] !== undefined){
-                                    table1.addRow(query['players'][i]['id'],query['players'][i]['name'],query['players'][i]['score']);
-                                }
-                            }
-                            embed.addFields({ name: `${query['online']}/${query['maxplayers']}`, value: '```\n'+table1+'```' });
-                        }
-                        if(query['online'] > 20){
-                            for(var i=20;i<40;i++){
-                                if(query['players'][i] !== undefined){
-                                    table2.addRow(query['players'][i]['id'],query['players'][i]['name'],query['players'][i]['score']);
-                                }
-                            }
-                            embed.addFields({ name: '\u200B', value: '```\n'+table2+'```' });
-                        }
-                        if(query['online'] > 40){
-                            for(var i=40;i<60;i++){
-                                if(query['players'][i] !== undefined){
-                                    table3.addRow(query['players'][i]['id'],query['players'][i]['name'],query['players'][i]['score']);
-                                }
-                            }
-                            embed.addFields({ name: '\u200B', value: '```\n'+table3+'```' });
-                        }
-                        if(query['online'] > 60){
-                            for(var i=60;i<80;i++){
-                                if(query['players'][i] !== undefined){
-                                    table4.addRow(query['players'][i]['id'],query['players'][i]['name'],query['players'][i]['score']);
-                                }
-                            }
-                            embed.addFields({ name: '\u200B', value: '```\n'+table4+'```' });
-                        }
-                        if(query['online'] > 80){
-                            for(var i=80;i<100;i++){
-                                if(query['players'][i] !== undefined){
-                                    table5.addRow(query['players'][i]['id'],query['players'][i]['name'],query['players'][i]['score']);
-                                }
-                            }
-                            embed.addFields({ name: '\u200B', value: '```\n'+table5+'```' });
-                        }
-                    }
-                    return message.channel.send({ embeds: [embed] });
                 }
-                else if (query['online'] == 0) {
-                    embed.addFields({ name: 'PLAYERS LIST', value: '*Server is empty*'});
-                    return message.channel.send({ embeds: [embed] });
-                }
+            } else {
+                embed.addFields({ name: 'PLAYERS LIST', value: '*Server is empty*' });
             }
+            return interaction.editReply({ embeds: [embed] });
         });
     }
 }

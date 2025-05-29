@@ -1,5 +1,6 @@
 require('dotenv').config();
-const { readdirSync } = require('fs');
+const fs = require('node:fs'); // Changed from require('fs') to require('node:fs') for consistency
+const path = require('node:path'); // Added for path joining
 const { Client, Collection, GatewayIntentBits, Partials, ActivityType, ChannelType } = require('discord.js');
 const express = require('express');
 
@@ -34,11 +35,19 @@ const client = new Client({
 });
 
 client.commands = new Collection();
-const pCommandFiles = readdirSync('./commands').filter(file => file.endsWith('.js'));
+// const pCommandFiles = readdirSync('./commands').filter(file => file.endsWith('.js')); // Old command loading
+const commandsPath = path.join(__dirname, 'commands'); // Path to commands directory
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js')); // Read command files
 
-for (const file of pCommandFiles) {
-    const command = require(`./commands/${file}`);
-    client.commands.set(command.name, command);
+for (const file of commandFiles) {
+    const filePath = path.join(commandsPath, file);
+    const command = require(filePath);
+    // Set a new item in the Collection with the key as the command name and the value as the exported module
+    if ('data' in command && 'execute' in command) {
+        client.commands.set(command.data.name, command);
+    } else {
+        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+    }
 }
 
 client.once('ready', async () => {
@@ -46,35 +55,73 @@ client.once('ready', async () => {
     client.user.setActivity("SA-MP", { type: ActivityType.Competing }); // use ActivityType enum to change it to Watching, Playing or Listening
 });
 
-client.on('messageCreate', async message => {
-    if (message.author.bot) return;
+// Remove old messageCreate handler for prefix commands
+// client.on('messageCreate', async message => {
+//     if (message.author.bot) return;
+//
+//     if(!message.content.toLowerCase().startsWith(process.env.PREFIX.toLowerCase())) return;
+//
+//     const args = message.content.slice(process.env.PREFIX.length).split(/ +/);
+//     const commandName = args.shift().toLowerCase();
+//
+//     const command = client.commands.get(commandName) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(commandName));
+//
+//     if (!command) return;
+//
+//     try{
+//         await command.run(client, message, args); // Old execution method
+//
+//         if(message.channel.type == ChannelType.DM)
+//             console.log(`[CMD_DM] ${message.author.tag} (${message.author.id}) | ${message.content}`);
+//         else
+//             console.log(`[CMD] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
+//     }
+//     catch (error){
+//         if(message.channel.type == ChannelType.DM)
+//             console.log(`[CMD_DM_ERR] ${message.author.tag} (${message.author.id}) | ${message.content}`);
+//         else
+//             console.log(`[CMD_ERR] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
+//
+//         console.error(error);
+//
+//         message.reply('An error occurred!');
+//     }
+// });
 
-    if(!message.content.toLowerCase().startsWith(process.env.PREFIX.toLowerCase())) return;
+// New interactionCreate handler for slash commands
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return; // Only handle slash commands
 
-    const args = message.content.slice(process.env.PREFIX.length).split(/ +/);
-    const commandName = args.shift().toLowerCase();
+    const command = interaction.client.commands.get(interaction.commandName);
 
-    const command = client.commands.get(commandName) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(commandName));
-
-    if (!command) return;
-
-    try{
-        await command.run(client, message, args);
-
-        if(message.channel.type == ChannelType.DM)
-            console.log(`[CMD_DM] ${message.author.tag} (${message.author.id}) | ${message.content}`);
-        else
-            console.log(`[CMD] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
+    if (!command) {
+        console.error(`No command matching ${interaction.commandName} was found.`);
+        return;
     }
-    catch (error){
-        if(message.channel.type == ChannelType.DM)
-            console.log(`[CMD_DM_ERR] ${message.author.tag} (${message.author.id}) | ${message.content}`);
-        else
-            console.log(`[CMD_ERR] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
 
+    try {
+        await command.execute(interaction); // Execute new method
+
+        // Logging for slash commands
+        if (interaction.channel.type == ChannelType.DM) {
+            console.log(`[SLASH_CMD_DM] ${interaction.user.tag} (${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
+        } else {
+            console.log(`[SLASH_CMD] ${interaction.guild.name}(${interaction.guild.id}) | ${interaction.user.tag}(${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
+        }
+    } catch (error) {
         console.error(error);
+        // Logging for slash command errors
+        if (interaction.channel.type == ChannelType.DM) {
+            console.log(`[SLASH_CMD_DM_ERR] ${interaction.user.tag} (${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
+        } else {
+            console.log(`[SLASH_CMD_ERR] ${interaction.guild.name}(${interaction.guild.id}) | ${interaction.user.tag}(${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
+        }
 
-        message.reply('An error occurred!');
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+        } else {
+            await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+        }
     }
 });
 
