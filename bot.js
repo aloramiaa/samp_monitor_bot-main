@@ -1,131 +1,192 @@
 require('dotenv').config();
-const fs = require('node:fs'); // Changed from require('fs') to require('node:fs') for consistency
-const path = require('node:path'); // Added for path joining
-const { Client, Collection, GatewayIntentBits, Partials, ActivityType, ChannelType } = require('discord.js');
 const express = require('express');
+const samp = require('samp-query');
+const AsciiTable = require('ascii-table'); // Keep for /api/players if it provides a raw data option, otherwise remove/replace
+const os = require('os'); // For system information if needed for ping, or just process.uptime
 
-// Web server setup
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middleware to ensure SAMP_IP is set for SA-MP related routes
+const ensureSampIp = (req, res, next) => {
+    if (!process.env.SAMP_IP) {
+        return res.status(500).json({ error: 'SAMP_IP is not configured in the .env file.' });
+    }
+    req.sampOptions = {
+        host: process.env.SAMP_IP.split(':')[0],
+        port: process.env.SAMP_IP.split(':')[1] || '7777'
+    };
+    next();
+};
+
+// --- UptimeRobot Health Check ---
 app.get('/', (req, res) => {
-  res.send('Bot is alive!'); // Basic response for root path
+  res.status(200).send('SA-MP API Helper is alive and running!');
 });
 
-app.get('/ping', (req, res) => {
-  res.status(200).send('Bot is active and pong!'); // Specific ping endpoint
+// --- API Endpoints ---
+
+// /api/ping - for basic service status, uptime, and memory usage
+app.get('/api/ping', (req, res) => {
+    const uptime = process.uptime();
+    const memoryUsage = process.memoryUsage();
+    res.json({
+        status: 'ok',
+        uptimeSeconds: uptime,
+        uptimeFormatted: msToTime(uptime * 1000), // Convert seconds to ms for msToTime
+        memoryUsage: {
+            rssMb: (memoryUsage.rss / 1024 / 1024).toFixed(2),
+            heapTotalMb: (memoryUsage.heapTotal / 1024 / 1024).toFixed(2),
+            heapUsedMb: (memoryUsage.heapUsed / 1024 / 1024).toFixed(2),
+            externalMb: (memoryUsage.external / 1024 / 1024).toFixed(2),
+        }
+    });
 });
+
+// /api/ip - returns basic server IP, port and online status
+app.get('/api/ip', ensureSampIp, (req, res) => {
+    const startTime = process.hrtime(); // Start timer
+
+    samp(req.sampOptions, (error, query) => {
+        const endTime = process.hrtime(startTime); // End timer
+        const queryLatencyMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2); // Calculate latency in ms
+
+        if (error) {
+            // console.error(`SAMP Query Error for /api/ip on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
+            return res.json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: false,
+                queryLatencyMs: parseFloat(queryLatencyMs),
+                error: 'Server is offline or unreachable.'
+            });
+        }
+        res.json({
+            host: req.sampOptions.host,
+            port: req.sampOptions.port,
+            online: true,
+            hostname: query ? query.hostname : null, // Add hostname if available
+            queryLatencyMs: parseFloat(queryLatencyMs)
+        });
+    });
+});
+
+// /api/server - returns detailed server information
+app.get('/api/server', ensureSampIp, (req, res) => {
+    samp(req.sampOptions, (error, query) => {
+        if (error) {
+            // console.error(`SAMP Query Error for /api/server on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
+            return res.status(503).json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: false,
+                error: 'Server is offline or unreachable.'
+            });
+        }
+        res.json({
+            host: req.sampOptions.host,
+            port: req.sampOptions.port,
+            online: true,
+            hostname: query.hostname,
+            gamemode: query.gamemode,
+            language: query.language,
+            passworded: query.passworded,
+            maxplayers: query.maxplayers,
+            onlineplayers: query.online, // 'online' is the key for current players from samp-query
+            rules: query.rules // Includes mapname, weburl, version, etc.
+        });
+    });
+});
+
+// /api/players - returns list of online players
+app.get('/api/players', ensureSampIp, (req, res) => {
+    samp(req.sampOptions, (error, query) => {
+        if (error) {
+            // console.error(`SAMP Query Error for /api/players on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
+            return res.status(503).json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: false,
+                error: 'Server is offline or unreachable.'
+            });
+        }
+
+        if (query.online === 0) {
+            return res.json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: true, // Server is online, but no players
+                hostname: query.hostname,
+                onlineplayers: 0,
+                maxplayers: query.maxplayers,
+                players: []
+            });
+        }
+        
+        // Case 1: More than 100 players online
+        if (query.online > 100) {
+            return res.json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: true,
+                hostname: query.hostname,
+                onlineplayers: query.online,
+                maxplayers: query.maxplayers,
+                players: [], // Player list is not provided in this case
+                note: "Players are more than 100 and hence cant list them"
+            });
+        }
+
+        // Case 2: 1-100 players online, but list is empty/unavailable from server
+        if ((!query.players || query.players.length === 0) && query.online > 0) { // query.online > 0 is redundant here due to earlier checks, but good for clarity
+             return res.json({
+                host: req.sampOptions.host,
+                port: req.sampOptions.port,
+                online: true,
+                hostname: query.hostname,
+                onlineplayers: query.online,
+                maxplayers: query.maxplayers,
+                players: [],
+                note: "Player list is unavailable or the server did not return player details (player count is under 100)."
+            });
+        }
+        
+        // Case 3: Players online (<=100) and list is available
+        res.json({
+            host: req.sampOptions.host,
+            port: req.sampOptions.port,
+            online: true,
+            hostname: query.hostname,
+            onlineplayers: query.online,
+            maxplayers: query.maxplayers,
+            players: query.players.map(p => ({ id: p.id, name: p.name, score: p.score, ping: p.ping }))
+        });
+    });
+});
+
 
 app.listen(port, () => {
-  console.log(`Web server listening on port ${port}`);
-});
-// End of web server setup
-
-const client = new Client({
-    failIfNotExists: false,
-    partials: [
-        Partials.Channel
-    ],
-    intents: [
-        GatewayIntentBits.DirectMessages, // comment or remove this if bot shouldn't receive DM messages
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
+  console.log(`SA-MP API Helper server listening on port ${port}`);
+  if (!process.env.SAMP_IP) {
+    console.warn('Warning: SAMP_IP is not defined in the .env file. SA-MP related API endpoints will return an error.');
+  }
 });
 
-client.commands = new Collection();
-// const pCommandFiles = readdirSync('./commands').filter(file => file.endsWith('.js')); // Old command loading
-const commandsPath = path.join(__dirname, 'commands'); // Path to commands directory
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js')); // Read command files
+// Helper function (msToTime) - adapted from original ping command
+const msToTime = ms => {
+    if (!ms || ms < 0) return '0s';
+    if (ms < 1000) return `${ms}ms`; // Show ms if less than a second
 
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    // Set a new item in the Collection with the key as the command name and the value as the exported module
-    if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
-    } else {
-        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-    }
-}
+    let seconds = Math.floor((ms / 1000) % 60);
+    let minutes = Math.floor((ms / (1000 * 60)) % 60);
+    let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+    let days = Math.floor(ms / (1000 * 60 * 60 * 24));
 
-client.once('ready', async () => {
-    console.log(`${client.user.username} is ready!`);
-    client.user.setActivity("SA-MP", { type: ActivityType.Competing }); // use ActivityType enum to change it to Watching, Playing or Listening
-});
+    let str = [];
+    if (days) str.push(days + 'd');
+    if (hours) str.push(hours + 'h');
+    if (minutes) str.push(minutes + 'm');
+    if (seconds) str.push(seconds + 's');
 
-// Remove old messageCreate handler for prefix commands
-// client.on('messageCreate', async message => {
-//     if (message.author.bot) return;
-//
-//     if(!message.content.toLowerCase().startsWith(process.env.PREFIX.toLowerCase())) return;
-//
-//     const args = message.content.slice(process.env.PREFIX.length).split(/ +/);
-//     const commandName = args.shift().toLowerCase();
-//
-//     const command = client.commands.get(commandName) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(commandName));
-//
-//     if (!command) return;
-//
-//     try{
-//         await command.run(client, message, args); // Old execution method
-//
-//         if(message.channel.type == ChannelType.DM)
-//             console.log(`[CMD_DM] ${message.author.tag} (${message.author.id}) | ${message.content}`);
-//         else
-//             console.log(`[CMD] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
-//     }
-//     catch (error){
-//         if(message.channel.type == ChannelType.DM)
-//             console.log(`[CMD_DM_ERR] ${message.author.tag} (${message.author.id}) | ${message.content}`);
-//         else
-//             console.log(`[CMD_ERR] ${message.guild.name}(${message.guild.id}) | ${message.author.tag}(${message.author.id}) | ${message.content}`);
-//
-//         console.error(error);
-//
-//         message.reply('An error occurred!');
-//     }
-// });
-
-// New interactionCreate handler for slash commands
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return; // Only handle slash commands
-
-    const command = interaction.client.commands.get(interaction.commandName);
-
-    if (!command) {
-        console.error(`No command matching ${interaction.commandName} was found.`);
-        return;
-    }
-
-    try {
-        await command.execute(interaction); // Execute new method
-
-        // Logging for slash commands
-        if (interaction.channel.type == ChannelType.DM) {
-            console.log(`[SLASH_CMD_DM] ${interaction.user.tag} (${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
-        } else {
-            console.log(`[SLASH_CMD] ${interaction.guild.name}(${interaction.guild.id}) | ${interaction.user.tag}(${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
-        }
-    } catch (error) {
-        console.error(error);
-        // Logging for slash command errors
-        if (interaction.channel.type == ChannelType.DM) {
-            console.log(`[SLASH_CMD_DM_ERR] ${interaction.user.tag} (${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
-        } else {
-            console.log(`[SLASH_CMD_ERR] ${interaction.guild.name}(${interaction.guild.id}) | ${interaction.user.tag}(${interaction.user.id}) | /${interaction.commandName} ${interaction.options.data.map(opt => `${opt.name}:${opt.value}`).join(' ')}`.trim());
-        }
-
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
-        } else {
-            await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
-        }
-    }
-});
-
-client.on('warn', console.warn);
-client.on('error', console.error);
-
-client.login(process.env.BOT_TOKEN);
+    return str.length > 0 ? str.join(' ') : '0s'; // Fallback for very small ms values that might result in empty array
+};
