@@ -1,23 +1,10 @@
-require('dotenv').config();
+// require('dotenv').config(); // No longer needed
 const express = require('express');
 const samp = require('samp-query');
-const AsciiTable = require('ascii-table'); // Keep for /api/players if it provides a raw data option, otherwise remove/replace
-const os = require('os'); // For system information if needed for ping, or just process.uptime
+const os = require('os');
 
 const app = express();
 const port = process.env.PORT || 3000;
-
-// Middleware to ensure SAMP_IP is set for SA-MP related routes
-const ensureSampIp = (req, res, next) => {
-    if (!process.env.SAMP_IP) {
-        return res.status(500).json({ error: 'SAMP_IP is not configured in the .env file.' });
-    }
-    req.sampOptions = {
-        host: process.env.SAMP_IP.split(':')[0],
-        port: process.env.SAMP_IP.split(':')[1] || '7777'
-    };
-    next();
-};
 
 // --- UptimeRobot Health Check ---
 app.get('/', (req, res) => {
@@ -25,6 +12,22 @@ app.get('/', (req, res) => {
 });
 
 // --- API Endpoints ---
+
+// Middleware to extract and validate samp options from query string
+const getSampOptions = (req, res, next) => {
+    const { ip, port } = req.query;
+    if (!ip) {
+        return res.status(400).json({ error: 'Missing required query parameter: ip' });
+    }
+    if (!port) {
+        return res.status(400).json({ error: 'Missing required query parameter: port' });
+    }
+    req.sampOptions = {
+        host: ip,
+        port: port
+    };
+    next();
+};
 
 // /api/ping - for basic service status, uptime, and memory usage
 app.get('/api/ping', (req, res) => {
@@ -44,15 +47,14 @@ app.get('/api/ping', (req, res) => {
 });
 
 // /api/ip - returns basic server IP, port and online status
-app.get('/api/ip', ensureSampIp, (req, res) => {
-    const startTime = process.hrtime(); // Start timer
+app.get('/api/ip', getSampOptions, (req, res) => {
+    const startTime = process.hrtime();
 
     samp(req.sampOptions, (error, query) => {
-        const endTime = process.hrtime(startTime); // End timer
-        const queryLatencyMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2); // Calculate latency in ms
+        const endTime = process.hrtime(startTime);
+        const queryLatencyMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2);
 
         if (error) {
-            // console.error(`SAMP Query Error for /api/ip on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
             return res.json({
                 host: req.sampOptions.host,
                 port: req.sampOptions.port,
@@ -65,17 +67,16 @@ app.get('/api/ip', ensureSampIp, (req, res) => {
             host: req.sampOptions.host,
             port: req.sampOptions.port,
             online: true,
-            hostname: query ? query.hostname : null, // Add hostname if available
+            hostname: query ? query.hostname : null,
             queryLatencyMs: parseFloat(queryLatencyMs)
         });
     });
 });
 
 // /api/server - returns detailed server information
-app.get('/api/server', ensureSampIp, (req, res) => {
+app.get('/api/server', getSampOptions, (req, res) => {
     samp(req.sampOptions, (error, query) => {
         if (error) {
-            // console.error(`SAMP Query Error for /api/server on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
             return res.status(503).json({
                 host: req.sampOptions.host,
                 port: req.sampOptions.port,
@@ -92,17 +93,16 @@ app.get('/api/server', ensureSampIp, (req, res) => {
             language: query.language,
             passworded: query.passworded,
             maxplayers: query.maxplayers,
-            onlineplayers: query.online, // 'online' is the key for current players from samp-query
-            rules: query.rules // Includes mapname, weburl, version, etc.
+            onlineplayers: query.online,
+            rules: query.rules
         });
     });
 });
 
 // /api/players - returns list of online players
-app.get('/api/players', ensureSampIp, (req, res) => {
+app.get('/api/players', getSampOptions, (req, res) => {
     samp(req.sampOptions, (error, query) => {
         if (error) {
-            // console.error(`SAMP Query Error for /api/players on ${req.sampOptions.host}:${req.sampOptions.port}:`, error);
             return res.status(503).json({
                 host: req.sampOptions.host,
                 port: req.sampOptions.port,
@@ -115,7 +115,7 @@ app.get('/api/players', ensureSampIp, (req, res) => {
             return res.json({
                 host: req.sampOptions.host,
                 port: req.sampOptions.port,
-                online: true, // Server is online, but no players
+                online: true,
                 hostname: query.hostname,
                 onlineplayers: 0,
                 maxplayers: query.maxplayers,
@@ -123,7 +123,6 @@ app.get('/api/players', ensureSampIp, (req, res) => {
             });
         }
         
-        // Case 1: More than 100 players online
         if (query.online > 100) {
             return res.json({
                 host: req.sampOptions.host,
@@ -132,13 +131,12 @@ app.get('/api/players', ensureSampIp, (req, res) => {
                 hostname: query.hostname,
                 onlineplayers: query.online,
                 maxplayers: query.maxplayers,
-                players: [], // Player list is not provided in this case
+                players: [],
                 note: "Players are more than 100 and hence cant list them"
             });
         }
 
-        // Case 2: 1-100 players online, but list is empty/unavailable from server
-        if ((!query.players || query.players.length === 0) && query.online > 0) { // query.online > 0 is redundant here due to earlier checks, but good for clarity
+        if ((!query.players || query.players.length === 0) && query.online > 0) {
              return res.json({
                 host: req.sampOptions.host,
                 port: req.sampOptions.port,
@@ -151,7 +149,6 @@ app.get('/api/players', ensureSampIp, (req, res) => {
             });
         }
         
-        // Case 3: Players online (<=100) and list is available
         res.json({
             host: req.sampOptions.host,
             port: req.sampOptions.port,
@@ -167,15 +164,12 @@ app.get('/api/players', ensureSampIp, (req, res) => {
 
 app.listen(port, () => {
   console.log(`SA-MP API Helper server listening on port ${port}`);
-  if (!process.env.SAMP_IP) {
-    console.warn('Warning: SAMP_IP is not defined in the .env file. SA-MP related API endpoints will return an error.');
-  }
 });
 
-// Helper function (msToTime) - adapted from original ping command
+// Helper function (msToTime)
 const msToTime = ms => {
     if (!ms || ms < 0) return '0s';
-    if (ms < 1000) return `${ms}ms`; // Show ms if less than a second
+    if (ms < 1000) return `${ms}ms`;
 
     let seconds = Math.floor((ms / 1000) % 60);
     let minutes = Math.floor((ms / (1000 * 60)) % 60);
@@ -188,5 +182,5 @@ const msToTime = ms => {
     if (minutes) str.push(minutes + 'm');
     if (seconds) str.push(seconds + 's');
 
-    return str.length > 0 ? str.join(' ') : '0s'; // Fallback for very small ms values that might result in empty array
+    return str.length > 0 ? str.join(' ') : '0s';
 };

@@ -1,20 +1,16 @@
 {
-  "name": "samp_monitor",
-  "version": "0.0.1",
+  "name": "samp_monitor_bot",
+  "version": "1.0.0",
   "description": "Discord Bot that displays informations about San Andreas Multiplayer server",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "mpudliszewski",
-  "license": "MIT",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "@discordjs/builders": "^1.11.2",
-    "ascii-table": "0.0.9",
-    "discord.js": "^14.2.0",
-    "dotenv": "^16.0.1",
-    "express": "^4.18.2",
-    "samp-query": "^0.1.5"
+    "express": "^4.19.2",
+    "samp-query": "^1.0.0"
   }
 }
